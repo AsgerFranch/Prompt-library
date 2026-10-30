@@ -77,6 +77,31 @@
             background-color: rgba(15, 15, 15, 0.6);
             backdrop-filter: blur(2px);
         }
+
+        /* Sidebar: skjult som standard på mobil/touch (selv i 'Desktop-websted' tilstand) */
+        #sidebar {
+            display: none;
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 16rem;
+            max-width: 78vw;
+            z-index: 40;
+        }
+        #sidebar.sidebar-open {
+            display: flex !important;
+        }
+        @media (min-width: 768px) and (pointer: fine) {
+            #sidebar {
+                display: flex;
+                position: relative;
+                max-width: none;
+            }
+            #sidebar.sidebar-closed-desktop {
+                display: none !important;
+            }
+        }
     </style>
 </head>
 <body class="h-[100dvh] w-screen overflow-hidden flex bg-white">
@@ -111,10 +136,10 @@
     <div id="app-container" class="w-full h-full flex hidden relative">
         
         <!-- Mobile Sidebar Backdrop -->
-        <div id="sidebar-backdrop" onclick="toggleSidebar(false)" class="fixed inset-0 bg-black/40 z-30 hidden md:hidden"></div>
+        <div id="sidebar-backdrop" onclick="toggleSidebar(false)" class="fixed inset-0 bg-black/40 z-30 hidden"></div>
 
         <!-- Sidebar -->
-        <div id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 bg-[#f7f7f5] border-r border-gray-200 flex flex-col h-full flex-shrink-0 transform -translate-x-full md:relative md:translate-x-0 transition-transform duration-200 ease-in-out">
+        <div id="sidebar" class="bg-[#f7f7f5] border-r border-gray-200 flex-col h-full flex-shrink-0 shadow-xl md:shadow-none">
             <!-- Sidebar Header -->
             <div class="p-4 flex items-center justify-between hover:bg-gray-200/50 cursor-pointer transition" id="user-profile-btn">
                 <div class="flex items-center space-x-2 overflow-hidden">
@@ -125,7 +150,7 @@
                 </div>
                 <div class="flex items-center space-x-2">
                     <i class="fa-solid fa-chevron-down text-xs text-gray-500"></i>
-                    <button type="button" onclick="event.stopPropagation(); toggleSidebar(false)" class="md:hidden text-gray-500 hover:text-gray-800 p-1">
+                    <button type="button" onclick="event.stopPropagation(); toggleSidebar(false)" class="text-gray-500 hover:text-gray-800 p-1" title="Luk menu">
                         <i class="fa-solid fa-xmark text-base"></i>
                     </button>
                 </div>
@@ -165,7 +190,7 @@
             <!-- Topbar / Breadcrumbs -->
             <div class="h-14 border-b border-gray-100 flex items-center px-3 sm:px-6 justify-between flex-shrink-0 gap-2">
                 <div class="flex items-center space-x-2 min-w-0 flex-1">
-                    <button onclick="toggleSidebar(true)" class="md:hidden text-gray-600 hover:text-gray-900 p-2 -ml-1 rounded-md hover:bg-gray-100 flex-shrink-0" aria-label="Åbn menu">
+                    <button onclick="toggleSidebar()" class="text-gray-600 hover:text-gray-900 p-2 -ml-1 rounded-md hover:bg-gray-100 flex-shrink-0" aria-label="Menu">
                         <i class="fa-solid fa-bars text-lg"></i>
                     </button>
                     <div class="flex items-center space-x-1 sm:space-x-2 text-sm text-gray-600 overflow-x-auto whitespace-nowrap no-scrollbar" id="breadcrumbs">
@@ -345,15 +370,20 @@
         const folderModalInput = document.getElementById('folder-modal-input');
         const folderModalSubmit = document.getElementById('folder-modal-submit');
 
-        // Mobile Sidebar Toggle
+        // Sidebar Toggle (works on both mobile/touch and desktop)
         window.toggleSidebar = function(show) {
-            const shouldShow = typeof show === 'boolean' ? show : sidebar.classList.contains('-translate-x-full');
-            if (shouldShow) {
-                sidebar.classList.remove('-translate-x-full');
-                sidebarBackdrop.classList.remove('hidden');
-            } else {
-                sidebar.classList.add('-translate-x-full');
+            const isDesktopMouse = window.matchMedia('(min-width: 768px) and (pointer: fine)').matches;
+            if (isDesktopMouse) {
+                const isClosed = sidebar.classList.contains('sidebar-closed-desktop');
+                const shouldShow = typeof show === 'boolean' ? show : isClosed;
+                sidebar.classList.toggle('sidebar-closed-desktop', !shouldShow);
+                sidebar.classList.remove('sidebar-open');
                 sidebarBackdrop.classList.add('hidden');
+            } else {
+                const isOpen = sidebar.classList.contains('sidebar-open');
+                const shouldShow = typeof show === 'boolean' ? show : !isOpen;
+                sidebar.classList.toggle('sidebar-open', shouldShow);
+                sidebarBackdrop.classList.toggle('hidden', !shouldShow);
             }
         };
 
@@ -527,7 +557,8 @@
                 div.onclick = (e) => {
                     if (e.target.closest('button')) return;
                     navigateToFolder(folder.id);
-                    toggleSidebar(false);
+                    sidebar.classList.remove('sidebar-open');
+                    sidebarBackdrop.classList.add('hidden');
                 };
                 
                 sidebarFolders.appendChild(div);
@@ -543,7 +574,8 @@
             }
             rootBtn.onclick = () => {
                 navigateToFolder(null);
-                toggleSidebar(false);
+                sidebar.classList.remove('sidebar-open');
+                sidebarBackdrop.classList.add('hidden');
             };
         }
 
