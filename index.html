@@ -162,12 +162,20 @@
             </div>
 
             <!-- Navigation -->
-            <div class="flex-1 overflow-y-auto py-2">
+            <div class="flex-1 overflow-y-auto py-2 flex flex-col">
                 <div class="px-3 mb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Oversigt</div>
                 
                 <div id="sidebar-root-btn" class="flex items-center space-x-2 px-4 py-2 cursor-pointer hover:bg-gray-200/50 text-sm font-medium">
                     <i class="fa-solid fa-house text-gray-500 w-4 text-center"></i>
                     <span>Alle noter (Hjem)</span>
+                </div>
+
+                <div id="sidebar-trash-btn" class="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-gray-200/50 text-sm text-gray-600 mx-2 rounded-md transition mt-0.5">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-trash-can text-gray-500 w-4 text-center"></i>
+                        <span>Papirkurv</span>
+                    </div>
+                    <span id="trash-count-badge" class="hidden text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded-full font-medium">0</span>
                 </div>
 
                 <div class="mt-4 px-3 mb-1 flex items-center justify-between group">
@@ -178,7 +186,7 @@
                 </div>
                 
                 <!-- Folders List -->
-                <div id="sidebar-folders" class="space-y-0.5">
+                <div id="sidebar-folders" class="space-y-0.5 flex-1">
                     <!-- Populated by JS -->
                 </div>
             </div>
@@ -198,7 +206,10 @@
                         <span class="cursor-pointer hover:underline">Hjem</span>
                     </div>
                 </div>
-                <div class="flex space-x-1.5 sm:space-x-2 flex-shrink-0">
+                <div id="normal-actions" class="flex space-x-1.5 sm:space-x-2 flex-shrink-0">
+                    <button onclick="navigateToFolder('TRASH')" class="text-sm text-gray-500 hover:text-gray-800 hover:bg-gray-100 px-2.5 py-1.5 rounded-md transition flex items-center" title="Papirkurv">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
                     <button onclick="createNewFolder()" class="text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 px-2.5 sm:px-3 py-1.5 rounded-md transition flex items-center" title="Ny Mappe">
                         <i class="fa-solid fa-folder-plus sm:mr-1.5"></i>
                         <span class="hidden sm:inline">Ny Mappe</span>
@@ -208,11 +219,19 @@
                         <span>Ny Note</span>
                     </button>
                 </div>
+                <div id="trash-actions" class="hidden flex space-x-2 flex-shrink-0">
+                    <button id="empty-trash-btn" onclick="emptyTrash()" class="text-sm bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded-md transition font-medium flex items-center">
+                        <i class="fa-solid fa-fire-burner mr-1.5"></i>
+                        <span>Tøm papirkurv</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Explorer Content -->
             <div class="flex-1 overflow-y-auto p-4 sm:p-8 lg:px-24">
-                <h1 id="current-folder-title" class="text-2xl sm:text-3xl font-bold mb-6 sm:mb-8 break-words">Hjem</h1>
+                <h1 id="current-folder-title" class="text-2xl sm:text-3xl font-bold mb-2 break-words">Hjem</h1>
+                <p id="trash-subtitle" class="text-xs sm:text-sm text-gray-500 mb-6 hidden">Elementer i papirkurven slettes permanent efter 30 dage.</p>
+                <div id="title-spacer" class="mb-4 sm:mb-6"></div>
                 
                 <!-- Folders Grid -->
                 <div class="mb-6 sm:mb-8">
@@ -473,16 +492,50 @@
         const getFoldersRef = () => collection(db, 'artifacts', appId, 'users', currentUser.uid, 'folders');
         const getPromptsRef = () => collection(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts');
 
+        const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+        function getTrashedMs(val) {
+            if (!val) return 0;
+            if (typeof val === 'number') return val;
+            if (typeof val.toMillis === 'function') return val.toMillis();
+            return 0;
+        }
+        function getDaysLeft(trashedAt) {
+            const elapsed = Date.now() - getTrashedMs(trashedAt);
+            return Math.max(1, Math.ceil((THIRTY_DAYS_MS - elapsed) / (24 * 60 * 60 * 1000)));
+        }
+
         function initDataSubscriptions() {
             if (!currentUser) return;
 
             folderUnsubscribe = onSnapshot(getFoldersRef(), (snapshot) => {
-                allFolders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const now = Date.now();
+                const validDocs = [];
+                snapshot.docs.forEach(d => {
+                    const data = d.data();
+                    const trashedMs = getTrashedMs(data.trashedAt);
+                    if (trashedMs && now - trashedMs >= THIRTY_DAYS_MS) {
+                        deleteDoc(d.ref).catch(err => console.error("Auto-purge folder error:", err));
+                    } else {
+                        validDocs.push({ id: d.id, ...data });
+                    }
+                });
+                allFolders = validDocs;
                 renderApp();
             }, (error) => console.error("Folders subscription error:", error));
 
             promptUnsubscribe = onSnapshot(getPromptsRef(), (snapshot) => {
-                allPrompts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const now = Date.now();
+                const validDocs = [];
+                snapshot.docs.forEach(d => {
+                    const data = d.data();
+                    const trashedMs = getTrashedMs(data.trashedAt);
+                    if (trashedMs && now - trashedMs >= THIRTY_DAYS_MS) {
+                        deleteDoc(d.ref).catch(err => console.error("Auto-purge note error:", err));
+                    } else {
+                        validDocs.push({ id: d.id, ...data });
+                    }
+                });
+                allPrompts = validDocs;
                 renderApp();
             }, (error) => console.error("Notes subscription error:", error));
         }
@@ -507,7 +560,7 @@
             if (!noteFolderSelect) return;
             const currentVal = noteFolderSelect.value;
             noteFolderSelect.innerHTML = '<option value="">Hjem (Rod)</option>';
-            const sortedFolders = [...allFolders].sort((a, b) => a.name.localeCompare(b.name));
+            const sortedFolders = allFolders.filter(f => !f.trashedAt).sort((a, b) => a.name.localeCompare(b.name));
             sortedFolders.forEach(f => {
                 const opt = document.createElement('option');
                 opt.value = f.id;
@@ -525,10 +578,11 @@
         function renderSidebar() {
             sidebarFolders.innerHTML = '';
             
-            const sortedFolders = [...allFolders].sort((a, b) => a.name.localeCompare(b.name));
+            const activeFolders = allFolders.filter(f => !f.trashedAt).sort((a, b) => a.name.localeCompare(b.name));
+            const trashedCount = allFolders.filter(f => !!f.trashedAt).length + allPrompts.filter(p => !!p.trashedAt).length;
             const touch = isTouchDevice();
             
-            sortedFolders.forEach(folder => {
+            activeFolders.forEach(folder => {
                 const isActive = folder.id === currentFolderId;
                 const div = document.createElement('div');
                 div.className = `flex items-center space-x-2 px-4 py-2 cursor-pointer text-sm item-hover transition rounded-md mx-2 ${isActive ? 'bg-gray-200/60 font-medium' : 'hover:bg-gray-100 text-gray-600'}`;
@@ -548,7 +602,7 @@
                         <button class="text-gray-400 hover:text-blue-600 p-1" title="Omdøb mappe" onclick="openRenameFolderModal('${folder.id}', event)">
                             <i class="fa-solid fa-pen text-xs"></i>
                         </button>
-                        <button class="text-gray-400 hover:text-red-500 p-1" title="Slet mappe" onclick="deleteFolder('${folder.id}', event)">
+                        <button class="text-gray-400 hover:text-red-500 p-1" title="Flyt til papirkurv" onclick="deleteFolder('${folder.id}', event)">
                             <i class="fa-solid fa-trash text-xs"></i>
                         </button>
                     </div>
@@ -577,24 +631,69 @@
                 sidebar.classList.remove('sidebar-open');
                 sidebarBackdrop.classList.add('hidden');
             };
+
+            // Håndter Papirkurv i sidebar
+            const trashBtn = document.getElementById('sidebar-trash-btn');
+            const trashBadge = document.getElementById('trash-count-badge');
+            trashBtn.className = `flex items-center justify-between px-4 py-2 cursor-pointer text-sm transition mx-2 rounded-md mt-0.5 ${currentFolderId === 'TRASH' ? 'bg-gray-200/60 font-medium text-gray-900' : 'hover:bg-gray-100 text-gray-600'}`;
+            if (trashedCount > 0) {
+                trashBadge.innerText = trashedCount;
+                trashBadge.classList.remove('hidden');
+            } else {
+                trashBadge.classList.add('hidden');
+            }
+            if (!touch) {
+                trashBtn.ondragover = (e) => handleDragOver(e);
+                trashBtn.ondragleave = (e) => handleDragLeave(e);
+                trashBtn.ondrop = (e) => handleDrop(e, 'TRASH');
+            }
+            trashBtn.onclick = () => {
+                navigateToFolder('TRASH');
+                sidebar.classList.remove('sidebar-open');
+                sidebarBackdrop.classList.add('hidden');
+            };
         }
 
         function renderMainContent() {
-            const currentViewFolders = allFolders.filter(f => f.parentId === currentFolderId);
-            const currentViewPrompts = allPrompts.filter(p => p.folderId === currentFolderId);
+            const isTrashView = currentFolderId === 'TRASH';
+            const currentViewFolders = isTrashView
+                ? allFolders.filter(f => !!f.trashedAt)
+                : allFolders.filter(f => !f.trashedAt && f.parentId === currentFolderId);
+            const currentViewPrompts = isTrashView
+                ? allPrompts.filter(p => !!p.trashedAt)
+                : allPrompts.filter(p => !p.trashedAt && p.folderId === currentFolderId);
             const touch = isTouchDevice();
 
-            // Update Title
-            if (currentFolderId === null) {
-                currentFolderTitle.innerText = "Alle noter";
+            const normalActions = document.getElementById('normal-actions');
+            const trashActions = document.getElementById('trash-actions');
+            const emptyTrashBtn = document.getElementById('empty-trash-btn');
+            const trashSubtitle = document.getElementById('trash-subtitle');
+            const titleSpacer = document.getElementById('title-spacer');
+
+            if (isTrashView) {
+                normalActions.classList.add('hidden');
+                trashActions.classList.remove('hidden');
+                emptyTrashBtn.classList.toggle('hidden', currentViewFolders.length === 0 && currentViewPrompts.length === 0);
+                trashSubtitle.classList.remove('hidden');
+                titleSpacer.classList.add('hidden');
+                currentFolderTitle.innerText = "Papirkurv";
             } else {
-                const folder = allFolders.find(f => f.id === currentFolderId);
-                currentFolderTitle.innerHTML = folder 
-                    ? `<span class="group inline-flex items-center cursor-pointer" onclick="openRenameFolderModal('${folder.id}', event)">
-                         ${escapeHTML(folder.name)}
-                         <i class="fa-solid fa-pen text-xs ml-3 text-gray-400 group-hover:text-gray-600"></i>
-                       </span>` 
-                    : "Ukendt mappe";
+                normalActions.classList.remove('hidden');
+                trashActions.classList.add('hidden');
+                trashSubtitle.classList.add('hidden');
+                titleSpacer.classList.remove('hidden');
+
+                if (currentFolderId === null) {
+                    currentFolderTitle.innerText = "Alle noter";
+                } else {
+                    const folder = allFolders.find(f => f.id === currentFolderId && !f.trashedAt);
+                    currentFolderTitle.innerHTML = folder 
+                        ? `<span class="group inline-flex items-center cursor-pointer" onclick="openRenameFolderModal('${folder.id}', event)">
+                             ${escapeHTML(folder.name)}
+                             <i class="fa-solid fa-pen text-xs ml-3 text-gray-400 group-hover:text-gray-600"></i>
+                           </span>` 
+                        : "Ukendt mappe";
+                }
             }
 
             // Render Folders Grid
@@ -605,7 +704,7 @@
                     const div = document.createElement('div');
                     div.className = "flex items-center justify-between p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition group";
                     
-                    if (!touch) {
+                    if (!touch && !isTrashView) {
                         div.setAttribute('draggable', 'true');
                         div.ondragstart = (e) => handleDragStart(e, 'folder', folder.id);
                         div.ondragover = (e) => handleDragOver(e);
@@ -613,24 +712,45 @@
                         div.ondrop = (e) => handleDrop(e, folder.id);
                     }
 
-                    div.innerHTML = `
-                        <div class="flex items-center space-x-3 flex-1 min-w-0 pointer-events-none">
-                            <i class="fa-solid fa-folder text-blue-400 text-xl flex-shrink-0"></i>
-                            <span class="font-medium text-sm truncate">${escapeHTML(folder.name)}</span>
-                        </div>
-                        <div class="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center space-x-1 pl-2">
-                            <button onclick="openRenameFolderModal('${folder.id}', event)" class="p-1.5 text-gray-400 hover:text-blue-600 rounded transition" title="Omdøb">
-                                <i class="fa-solid fa-pen text-xs"></i>
-                            </button>
-                            <button onclick="deleteFolder('${folder.id}', event)" class="p-1.5 text-gray-400 hover:text-red-500 rounded transition" title="Slet">
-                                <i class="fa-solid fa-trash text-xs"></i>
-                            </button>
-                        </div>
-                    `;
-                    div.onclick = (e) => {
-                        if (e.target.closest('button')) return;
-                        navigateToFolder(folder.id);
-                    };
+                    if (isTrashView) {
+                        const daysLeft = getDaysLeft(folder.trashedAt);
+                        div.innerHTML = `
+                            <div class="flex items-center space-x-3 flex-1 min-w-0">
+                                <i class="fa-solid fa-folder text-gray-400 text-xl flex-shrink-0"></i>
+                                <div class="min-w-0 flex-1">
+                                    <div class="font-medium text-sm truncate text-gray-700">${escapeHTML(folder.name)}</div>
+                                    <div class="text-xs text-gray-400">Slettes om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dage'}</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-1 pl-2">
+                                <button onclick="restoreFolder('${folder.id}', event)" class="p-1.5 text-gray-500 hover:text-green-600 rounded transition" title="Gendan mappe">
+                                    <i class="fa-solid fa-rotate-left text-xs"></i>
+                                </button>
+                                <button onclick="permanentlyDeleteFolder('${folder.id}', event)" class="p-1.5 text-gray-500 hover:text-red-600 rounded transition" title="Slet permanent">
+                                    <i class="fa-solid fa-trash text-xs"></i>
+                                </button>
+                            </div>
+                        `;
+                    } else {
+                        div.innerHTML = `
+                            <div class="flex items-center space-x-3 flex-1 min-w-0 pointer-events-none">
+                                <i class="fa-solid fa-folder text-blue-400 text-xl flex-shrink-0"></i>
+                                <span class="font-medium text-sm truncate">${escapeHTML(folder.name)}</span>
+                            </div>
+                            <div class="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center space-x-1 pl-2">
+                                <button onclick="openRenameFolderModal('${folder.id}', event)" class="p-1.5 text-gray-400 hover:text-blue-600 rounded transition" title="Omdøb">
+                                    <i class="fa-solid fa-pen text-xs"></i>
+                                </button>
+                                <button onclick="deleteFolder('${folder.id}', event)" class="p-1.5 text-gray-400 hover:text-red-500 rounded transition" title="Flyt til papirkurv">
+                                    <i class="fa-solid fa-trash text-xs"></i>
+                                </button>
+                            </div>
+                        `;
+                        div.onclick = (e) => {
+                            if (e.target.closest('button')) return;
+                            navigateToFolder(folder.id);
+                        };
+                    }
                     foldersGrid.appendChild(div);
                 });
             } else {
@@ -645,7 +765,7 @@
                     const div = document.createElement('div');
                     div.className = "flex items-center justify-between py-3 px-2 sm:px-3 hover:bg-gray-50 active:bg-gray-100 cursor-pointer group rounded transition";
                     
-                    if (!touch) {
+                    if (!touch && !isTrashView) {
                         div.setAttribute('draggable', 'true');
                         div.ondragstart = (e) => handleDragStart(e, 'prompt', prompt.id);
                     }
@@ -656,19 +776,40 @@
                     const textContent = tempDiv.textContent || tempDiv.innerText || '';
                     const previewText = textContent.length > 80 ? textContent.substring(0, 80) + '...' : textContent;
 
-                    div.innerHTML = `
-                        <div class="flex items-center space-x-3 flex-1 min-w-0" onclick="openPromptEditor('${prompt.id}')">
-                            <i class="fa-solid fa-grip-vertical text-gray-300 cursor-grab group-hover:text-gray-400 text-sm hidden md:inline"></i>
-                            <i class="fa-regular fa-note-sticky text-gray-400 text-lg w-5 text-center flex-shrink-0"></i>
-                            <div class="flex-1 min-w-0">
-                                <div class="font-medium text-sm text-gray-800 truncate">${escapeHTML(prompt.title) || 'Navnløs note'}</div>
-                                <div class="text-xs text-gray-400 truncate">${escapeHTML(previewText) || 'Tom note...'}</div>
+                    if (isTrashView) {
+                        const daysLeft = getDaysLeft(prompt.trashedAt);
+                        div.innerHTML = `
+                            <div class="flex items-center space-x-3 flex-1 min-w-0" onclick="openPromptEditor('${prompt.id}')">
+                                <i class="fa-regular fa-note-sticky text-gray-400 text-lg w-5 text-center flex-shrink-0"></i>
+                                <div class="flex-1 min-w-0">
+                                    <div class="font-medium text-sm text-gray-700 truncate">${escapeHTML(prompt.title) || 'Navnløs note'}</div>
+                                    <div class="text-xs text-gray-400 truncate">Slettes om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dage'} · ${escapeHTML(previewText) || 'Tom note...'}</div>
+                                </div>
                             </div>
-                        </div>
-                        <button onclick="deletePrompt('${prompt.id}', event)" class="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-red-500 p-2 transition flex-shrink-0" title="Slet note">
-                            <i class="fa-solid fa-trash text-sm"></i>
-                        </button>
-                    `;
+                            <div class="flex items-center space-x-1 flex-shrink-0">
+                                <button onclick="restorePrompt('${prompt.id}', event)" class="text-gray-500 hover:text-green-600 p-2 transition" title="Gendan note">
+                                    <i class="fa-solid fa-rotate-left text-sm"></i>
+                                </button>
+                                <button onclick="permanentlyDeletePrompt('${prompt.id}', event)" class="text-gray-500 hover:text-red-600 p-2 transition" title="Slet permanent">
+                                    <i class="fa-solid fa-trash text-sm"></i>
+                                </button>
+                            </div>
+                        `;
+                    } else {
+                        div.innerHTML = `
+                            <div class="flex items-center space-x-3 flex-1 min-w-0" onclick="openPromptEditor('${prompt.id}')">
+                                <i class="fa-solid fa-grip-vertical text-gray-300 cursor-grab group-hover:text-gray-400 text-sm hidden md:inline"></i>
+                                <i class="fa-regular fa-note-sticky text-gray-400 text-lg w-5 text-center flex-shrink-0"></i>
+                                <div class="flex-1 min-w-0">
+                                    <div class="font-medium text-sm text-gray-800 truncate">${escapeHTML(prompt.title) || 'Navnløs note'}</div>
+                                    <div class="text-xs text-gray-400 truncate">${escapeHTML(previewText) || 'Tom note...'}</div>
+                                </div>
+                            </div>
+                            <button onclick="deletePrompt('${prompt.id}', event)" class="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-red-500 p-2 transition flex-shrink-0" title="Flyt til papirkurv">
+                                <i class="fa-solid fa-trash text-sm"></i>
+                            </button>
+                        `;
+                    }
                     promptsList.appendChild(div);
                 });
             } else {
@@ -677,6 +818,9 @@
 
             // Empty State
             if (currentViewFolders.length === 0 && currentViewPrompts.length === 0) {
+                emptyState.innerHTML = isTrashView
+                    ? `<i class="fa-solid fa-trash-can text-4xl mb-3"></i><p>Papirkurven er tom.</p>`
+                    : `<i class="fa-regular fa-note-sticky text-4xl mb-3"></i><p>Ingen noter i denne mappe endnu.</p>`;
                 emptyState.classList.remove('hidden');
             } else {
                 emptyState.classList.add('hidden');
@@ -696,6 +840,19 @@
             homeSpan.ondrop = (e) => handleDrop(e, null);
 
             breadcrumbs.appendChild(homeSpan);
+
+            if (currentFolderId === 'TRASH') {
+                const separator = document.createElement('span');
+                separator.className = "text-gray-400";
+                separator.innerText = "/";
+                breadcrumbs.appendChild(separator);
+
+                const trashSpan = document.createElement('span');
+                trashSpan.className = "font-medium text-gray-800 px-1 py-0.5 rounded";
+                trashSpan.innerText = "Papirkurv";
+                breadcrumbs.appendChild(trashSpan);
+                return;
+            }
             
             if (currentFolderId !== null) {
                 const trail = [];
@@ -772,6 +929,14 @@
             if (!draggedItem || !currentUser) return;
 
             const { type, id } = draggedItem;
+            draggedItem = null;
+            document.querySelectorAll('.opacity-40').forEach(el => el.classList.remove('opacity-40'));
+
+            if (targetFolderId === 'TRASH') {
+                if (type === 'prompt') await window.deletePrompt(id);
+                else if (type === 'folder') await window.deleteFolder(id);
+                return;
+            }
 
             if (type === 'prompt') {
                 try {
@@ -784,7 +949,6 @@
                 }
             } else if (type === 'folder') {
                 if (id === targetFolderId || isDescendantOf(targetFolderId, id)) {
-                    draggedItem = null;
                     return;
                 }
 
@@ -796,9 +960,6 @@
                     console.error("Fejl ved flytning af mappe:", err);
                 }
             }
-
-            draggedItem = null;
-            document.querySelectorAll('.opacity-40').forEach(el => el.classList.remove('opacity-40'));
         }
 
         function isDescendantOf(targetFolderId, parentCandidateId) {
@@ -858,10 +1019,11 @@
             if (!name) return;
 
             if (folderModalMode === 'create') {
+                const targetParent = currentFolderId === 'TRASH' ? null : currentFolderId;
                 try {
                     await addDoc(getFoldersRef(), {
                         name: name,
-                        parentId: currentFolderId,
+                        parentId: targetParent,
                         createdAt: serverTimestamp()
                     });
                 } catch (error) {
@@ -891,11 +1053,12 @@
 
         window.createNewPrompt = async function() {
             if (!currentUser) return;
+            const targetFolder = currentFolderId === 'TRASH' ? null : currentFolderId;
             try {
                 const newPromptRef = await addDoc(getPromptsRef(), {
                     title: '',
                     content: '',
-                    folderId: currentFolderId,
+                    folderId: targetFolder,
                     createdAt: serverTimestamp(),
                     updatedAt: serverTimestamp()
                 });
@@ -905,28 +1068,131 @@
             }
         };
 
-        // Delete Operations
+        // Trash & Delete Operations (Soft-delete til papirkurv + udløb efter 30 dage)
         window.deleteFolder = async function(folderId, event) {
-            event.stopPropagation();
+            if (event) event.stopPropagation();
             if (!currentUser) return;
             
+            const now = Date.now();
+            const affectedFolderIds = allFolders
+                .filter(f => f.id === folderId || isDescendantOf(f.id, folderId))
+                .map(f => f.id);
+            const affectedPrompts = allPrompts.filter(p => affectedFolderIds.includes(p.folderId) && !p.trashedAt);
+
             try {
-                await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', folderId));
-                if (currentFolderId === folderId) {
+                await Promise.all([
+                    ...affectedFolderIds.map(id =>
+                        updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', id), { trashedAt: now })
+                    ),
+                    ...affectedPrompts.map(p =>
+                        updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', p.id), { trashedAt: now })
+                    )
+                ]);
+                if (affectedFolderIds.includes(currentFolderId)) {
                     navigateToFolder(null);
                 }
             } catch (error) {
-                console.error("Fejl ved sletning af mappe:", error);
+                console.error("Fejl ved flytning af mappe til papirkurv:", error);
             }
         };
 
         window.deletePrompt = async function(promptId, event) {
-            event.stopPropagation();
+            if (event) event.stopPropagation();
+            if (!currentUser) return;
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', promptId), {
+                    trashedAt: Date.now()
+                });
+            } catch (error) {
+                console.error("Fejl ved flytning af note til papirkurv:", error);
+            }
+        };
+
+        window.restoreFolder = async function(folderId, event) {
+            if (event) event.stopPropagation();
+            if (!currentUser) return;
+            const folder = allFolders.find(f => f.id === folderId);
+            if (!folder) return;
+
+            const parentExistsAndActive = folder.parentId && allFolders.some(f => f.id === folder.parentId && !f.trashedAt);
+            const descendantFolderIds = allFolders
+                .filter(f => f.id === folderId || isDescendantOf(f.id, folderId))
+                .map(f => f.id);
+            const childPrompts = allPrompts.filter(p => descendantFolderIds.includes(p.folderId) && !!p.trashedAt);
+
+            try {
+                await Promise.all([
+                    updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', folderId), {
+                        trashedAt: null,
+                        parentId: parentExistsAndActive ? folder.parentId : null
+                    }),
+                    ...descendantFolderIds.filter(id => id !== folderId).map(id =>
+                        updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', id), { trashedAt: null })
+                    ),
+                    ...childPrompts.map(p =>
+                        updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', p.id), { trashedAt: null })
+                    )
+                ]);
+            } catch (error) {
+                console.error("Fejl ved gendannelse af mappe:", error);
+            }
+        };
+
+        window.restorePrompt = async function(promptId, event) {
+            if (event) event.stopPropagation();
+            if (!currentUser) return;
+            const promptDoc = allPrompts.find(p => p.id === promptId);
+            if (!promptDoc) return;
+
+            const folderExistsAndActive = promptDoc.folderId && allFolders.some(f => f.id === promptDoc.folderId && !f.trashedAt);
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', promptId), {
+                    trashedAt: null,
+                    folderId: folderExistsAndActive ? promptDoc.folderId : null
+                });
+            } catch (error) {
+                console.error("Fejl ved gendannelse af note:", error);
+            }
+        };
+
+        window.permanentlyDeleteFolder = async function(folderId, event) {
+            if (event) event.stopPropagation();
+            if (!currentUser) return;
+            const affectedFolderIds = allFolders
+                .filter(f => f.id === folderId || isDescendantOf(f.id, folderId))
+                .map(f => f.id);
+            const affectedPrompts = allPrompts.filter(p => affectedFolderIds.includes(p.folderId) && !!p.trashedAt);
+            try {
+                await Promise.all([
+                    ...affectedFolderIds.map(id => deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', id))),
+                    ...affectedPrompts.map(p => deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', p.id)))
+                ]);
+            } catch (error) {
+                console.error("Fejl ved permanent sletning af mappe:", error);
+            }
+        };
+
+        window.permanentlyDeletePrompt = async function(promptId, event) {
+            if (event) event.stopPropagation();
             if (!currentUser) return;
             try {
                 await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', promptId));
             } catch (error) {
-                console.error("Fejl ved sletning af note:", error);
+                console.error("Fejl ved permanent sletning af note:", error);
+            }
+        };
+
+        window.emptyTrash = async function() {
+            if (!currentUser) return;
+            const trashedFolders = allFolders.filter(f => !!f.trashedAt);
+            const trashedPrompts = allPrompts.filter(p => !!p.trashedAt);
+            try {
+                await Promise.all([
+                    ...trashedFolders.map(f => deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'folders', f.id))),
+                    ...trashedPrompts.map(p => deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'prompts', p.id)))
+                ]);
+            } catch (error) {
+                console.error("Fejl ved tømning af papirkurv:", error);
             }
         };
 
